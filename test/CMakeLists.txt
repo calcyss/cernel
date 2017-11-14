@@ -1,6 +1,9 @@
-cmake_minimum_required(version 3.0)
+cmake_minimum_required(VERSION 3.0)
 project(cernel_test)
 
-file(glob_recurse source_files src/*.cpp)
+include_directories(../)
 
-add_executable(test ${source_files})
+add_executable(basic src/basic_test.cpp)
+add_executable(num_threads src/num_threads.cpp)
+target_link_libraries(basic -static)
+target_link_libraries(num_threads -static)
