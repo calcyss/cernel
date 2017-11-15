@@ -13,6 +13,7 @@
 
 //Misc headers
 #include <functional>
+#include <utility>
 
 namespace ccy
 {
@@ -31,6 +32,39 @@ namespace ccy
             mStatus = Stopped;
             std::function<void()> worker;
 
+            worker = [this](){
+                while(true)
+                {
+                    std::unique_lock<std::mutex> lock(mStatusMutex); //CV for status updates
+                    mCV.wait(lock);
+                    if(mStatus != Running) //If threadpool status does not imply running
+                    {
+                        lock.unlock(); //First unlock, although technically unnecessary
+                        break; //Break out of loop, ending thread in the process
+                    }
+                    else //If threadpool is in running state
+                    {
+                        lock.unlock(); //Unlock state
+                        while(true) //Loop until no tasks are left
+                        {
+                            mTasksMutex.lock(); //Lock task queue
+                            if(mTasks.empty()) //IF no tasks left, break out of loop and return to waiting
+                            {
+                                mTasksMutex.unlock();
+                                break;
+                            }
+                            else //Else, retrieve a task, unlock the task queue and execute the task
+                            {
+                                std::function<void()> task = mTasks.front();
+                                mTasks.pop();
+                                mTasksMutex.unlock();
+                                task();
+                            }
+                        }
+                    }
+                }
+            };
+
             for(int i = 0; i < _nWorkers; i++)
             {
                 std::thread tWorker(worker);
@@ -39,24 +73,39 @@ namespace ccy
         }
         ~cernel()
         {
-
+            if(mStatus == Running)
+            {
+                stop();
+            }
         }
-
-        //Public member functions
-        void start()
+        inline void stop()
         {
-
+            mStatusMutex.lock();
+            mStatus = Stopped;
+            mStatusMutex.unlock();
+            mCV.notify_all();
+            for(std::thread& worker : mWorkers)
+            {
+                worker.join();
+            }
         }
-        void stop()
+        template<typename RT>
+        inline std::future<RT> queueTask(std::function<RT(void)> _task, bool _execute = false)
         {
-
-        }
-        template<typename RT(typename AT...)>
-        std::future<RT> queueTask(std::function<RT(AT)> _task)
-        {
-            std::function<void()> realTask = [](){
-
+            std::promise<RT> promise;
+            std::function<void()> realTask = [&promise, &_task](){
+                RT value = _task();
+                promise.set_value(value);
             };
+            mTasksMutex.lock();
+            mTasks.emplace(realTask);
+            mTasksMutex.unlock();
+            if(_execute) flush();
+            return promise.get_future();
+        }
+        inline void flush()
+        {
+            mCV.notify_all();
         }
     private:
         //Misc
@@ -64,10 +113,14 @@ namespace ccy
 
         //Containers
         std::vector<std::thread> mWorkers;
-        std::priority_queue<std::function<void()>> mTasks;
+        std::queue<std::function<void()>> mTasks;
 
         //Mutexes
         std::mutex mTasksMutex;
+        std::mutex mStatusMutex;
+
+        //Condition variable
+        std::condition_variable mCV;
     };
 }
 
