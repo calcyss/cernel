@@ -14,6 +14,17 @@
 //Misc headers
 #include <functional>
 #include <utility>
+#include <string>
+#include <iostream>
+
+std::mutex m;
+
+void log(std::string msg)
+{
+    m.lock();
+    std::cout << msg << std::endl;
+    m.unlock();
+}
 
 namespace ccy
 {
@@ -29,7 +40,7 @@ namespace ccy
         //Constructor/Destructor
         cernel(unsigned int _nWorkers = std::thread::hardware_concurrency())
         {
-            mStatus = Stopped;
+            mStatus = Running;
             std::function<void()> worker;
 
             worker = [this](){
@@ -38,10 +49,7 @@ namespace ccy
                     std::unique_lock<std::mutex> lock(mStatusMutex); //CV for status updates
                     mCV.wait(lock);
                     if(mStatus != Running) //If threadpool status does not imply running
-                    {
-                        lock.unlock(); //First unlock, although technically unnecessary
                         break; //Break out of loop, ending thread in the process
-                    }
                     else //If threadpool is in running state
                     {
                         lock.unlock(); //Unlock state
@@ -58,7 +66,7 @@ namespace ccy
                                 std::function<void()> task = mTasks.front();
                                 mTasks.pop();
                                 mTasksMutex.unlock();
-                                task();
+                                task(); //Execute task
                             }
                         }
                     }
@@ -73,10 +81,7 @@ namespace ccy
         }
         ~cernel()
         {
-            if(mStatus == Running)
-            {
-                stop();
-            }
+            if(mStatus == Running) stop();
         }
         inline void stop()
         {
@@ -90,15 +95,16 @@ namespace ccy
             }
         }
         template<typename RT>
-        inline std::future<RT> queueTask(std::function<RT(void)> _task, bool _execute = false)
+        inline std::future<RT> queueTask(std::function<RT()> _task, bool _execute = false)
         {
             std::promise<RT> promise;
-            std::function<void()> realTask = [&promise, &_task](){
-                RT value = _task();
-                promise.set_value(value);
-            };
+            std::function<void()> func([&_task, &promise]() -> RT {
+                RT val = _task();
+                promise.set_value(val);
+            });
+
             mTasksMutex.lock();
-            mTasks.emplace(realTask);
+            mTasks.emplace(func);
             mTasksMutex.unlock();
             if(_execute) flush();
             return promise.get_future();
