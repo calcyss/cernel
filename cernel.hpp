@@ -47,9 +47,15 @@ namespace ccy
                 while(true)
                 {
                     std::unique_lock<std::mutex> lock(mStatusMutex); //CV for status updates
+                    if(mStatus != Running) //Same thing as below, in case a thread "arrives later".
+                    {
+                        break;
+                    } //Break out of loop, ending thread in the process
                     mCV.wait(lock);
                     if(mStatus != Running) //If threadpool status does not imply running
-                        break; //Break out of loop, ending thread in the process
+                    {
+                        break;
+                    } //Break out of loop, ending thread in the process
                     else //If threadpool is in running state
                     {
                         lock.unlock(); //Unlock state
@@ -89,25 +95,52 @@ namespace ccy
             mStatus = Stopped;
             mStatusMutex.unlock();
             mCV.notify_all();
-            for(std::thread& worker : mWorkers)
+
+            for(std::thread& t : mWorkers)
             {
-                worker.join();
+                t.join();
             }
         }
         template<typename RT>
         inline std::future<RT> queueTask(std::function<RT()> _task, bool _execute = false)
         {
-            std::promise<RT> promise;
-            std::function<void()> func([&_task, &promise]() -> RT {
-                RT val = _task();
-                promise.set_value(val);
-            });
+            if(mStatus == Running)
+            {
+                auto promise = std::make_shared<std::promise<RT>>();
+                std::function<void()> func([promise, task = std::move(_task)]() -> RT {
+                    RT val = task();
+                    promise->set_value(val);
+                });
 
-            mTasksMutex.lock();
-            mTasks.emplace(func);
-            mTasksMutex.unlock();
-            if(_execute) flush();
-            return promise.get_future();
+                mTasksMutex.lock();
+                mTasks.emplace(func);
+                mTasksMutex.unlock();
+                if(_execute)
+                {
+                    flush();
+                }
+                return promise->get_future();
+            }
+        }
+        inline std::future<void> queueTask(std::function<void()> _task, bool _execute = false)
+        {
+            if(mStatus == Running)
+            {
+                auto promise = std::make_shared<std::promise<void>>();
+                std::function<void()> func([promise, task = std::move(_task)]() -> void {
+                    task();
+                    promise->set_value();
+                });
+
+                mTasksMutex.lock();
+                mTasks.emplace(func);
+                mTasksMutex.unlock();
+                if(_execute)
+                {
+                    flush();
+                }
+                return promise->get_future();
+            }
         }
         inline void flush()
         {
