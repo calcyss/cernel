@@ -1,0 +1,9 @@
+[default]
+name=Default
+device=local
+runtime=host
+config-opts=
+run-opts=
+prefix=/home/dwanner/.cache/gnome-builder/install/cernel/host
+app-id=
+default=true
